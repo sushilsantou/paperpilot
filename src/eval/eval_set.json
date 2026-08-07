@@ -1,0 +1,62 @@
+[
+  {
+    "id": "q1",
+    "question": "What is retrieval-augmented generation and why was it proposed?",
+    "expected_keywords": ["retrieval", "generation", "parametric", "knowledge", "language model"]
+  },
+  {
+    "id": "q2",
+    "question": "How does RAG reduce hallucination compared to a standalone language model?",
+    "expected_keywords": ["hallucination", "grounding", "retrieval", "factual", "external"]
+  },
+  {
+    "id": "q3",
+    "question": "What role does the retriever component play in a RAG pipeline?",
+    "expected_keywords": ["retriever", "documents", "relevant", "index", "query"]
+  },
+  {
+    "id": "q4",
+    "question": "What are common evaluation metrics used for retrieval quality in RAG systems?",
+    "expected_keywords": ["recall", "precision", "evaluation", "ranking", "relevance"]
+  },
+  {
+    "id": "q5",
+    "question": "How is a vector database typically used in retrieval-augmented generation?",
+    "expected_keywords": ["vector", "embedding", "similarity", "index", "database"]
+  },
+  {
+    "id": "q6",
+    "question": "What is the difference between dense and sparse retrieval methods?",
+    "expected_keywords": ["dense", "sparse", "embedding", "keyword", "bm25"]
+  },
+  {
+    "id": "q7",
+    "question": "How can chunking strategy affect RAG system performance?",
+    "expected_keywords": ["chunk", "context", "window", "segment", "passage"]
+  },
+  {
+    "id": "q8",
+    "question": "What is re-ranking and why is it used after initial retrieval?",
+    "expected_keywords": ["rerank", "ranking", "relevance", "score", "candidate"]
+  },
+  {
+    "id": "q9",
+    "question": "How do multi-hop or iterative retrieval approaches differ from single-pass retrieval?",
+    "expected_keywords": ["multi-hop", "iterative", "reasoning", "retrieval", "step"]
+  },
+  {
+    "id": "q10",
+    "question": "What challenges arise when scaling RAG systems to large document collections?",
+    "expected_keywords": ["scale", "latency", "index", "large-scale", "efficiency"]
+  },
+  {
+    "id": "q11",
+    "question": "How can prompt design influence the faithfulness of a generated answer to retrieved context?",
+    "expected_keywords": ["prompt", "faithfulness", "context", "grounding", "instruction"]
+  },
+  {
+    "id": "q12",
+    "question": "What is the role of citations or source attribution in RAG-generated answers?",
+    "expected_keywords": ["citation", "attribution", "source", "verifiable", "evidence"]
+  }
+]
