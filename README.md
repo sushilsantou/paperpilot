@@ -85,6 +85,18 @@ cp .env.example .env
 docker compose up -d qdrant     # or: docker run -p 6333:6333 qdrant/qdrant
 ```
 
+**No Docker?** Set `QDRANT_PATH` instead and qdrant-client runs the store
+embedded, in-process, against local files — same client API, no server:
+
+```bash
+export QDRANT_PATH=./qdrant_local    # Windows: set QDRANT_PATH=.\qdrant_local
+```
+
+Embedded mode holds an exclusive lock on that directory, so one process may
+use it at a time (ingest, *then* eval, *then* serve — not concurrently). When
+`QDRANT_PATH` is unset, `QDRANT_URL` is used and nothing changes. See
+`src/vectorstore.py`.
+
 ## Running it
 
 ```bash

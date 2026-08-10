@@ -19,8 +19,11 @@ class Settings:
         "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    # Vector store
+    # Vector store. Set QDRANT_PATH to run qdrant embedded (in-process, on
+    # local files, no Docker) instead of talking to a server — see
+    # src/vectorstore.py for the tradeoff. QDRANT_URL is used when unset.
     qdrant_url: str = os.getenv("QDRANT_URL", "http://localhost:6333")
+    qdrant_path: str = os.getenv("QDRANT_PATH", "")
     qdrant_collection: str = os.getenv("QDRANT_COLLECTION", "arxiv_papers")
 
     # Chunking

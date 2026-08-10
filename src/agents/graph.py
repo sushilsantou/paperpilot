@@ -21,6 +21,7 @@ from src.agents.retriever_agent import retriever_node
 from src.agents.state import AgentState
 from src.agents.synthesis_agent import synthesis_node
 from src.config import settings
+from src.vectorstore import get_qdrant_client
 
 
 def _route_after_critic(state: AgentState) -> str:
@@ -52,7 +53,7 @@ def build_graph(client: QdrantClient, keyword_weight: float = 0.3):
 
 
 def answer_question(question: str, client: QdrantClient | None = None, keyword_weight: float = 0.3) -> AgentState:
-    client = client or QdrantClient(url=settings.qdrant_url)
+    client = client or get_qdrant_client()
     app = build_graph(client, keyword_weight=keyword_weight)
     initial_state: AgentState = {"question": question, "retry_count": 0}
     result = app.invoke(initial_state)

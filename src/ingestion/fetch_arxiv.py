@@ -7,9 +7,27 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List
 import json
+import time
+import urllib.request
 
 import arxiv
 from tqdm import tqdm
+
+# arxiv 4.x dropped Result.download_pdf (it existed in 2.x), so fetch the PDF
+# over plain HTTP from result.pdf_url instead. That URL is stable across every
+# version of the package, which keeps this working regardless of which one is
+# installed.
+_PDF_TIMEOUT_SEC = 60
+_INTER_DOWNLOAD_DELAY_SEC = 1.0  # arXiv asks callers not to hammer the endpoint
+
+
+def _download_pdf(pdf_url: str, dest: Path) -> None:
+    request = urllib.request.Request(
+        pdf_url,
+        headers={"User-Agent": "PaperPilot/0.1 (+https://github.com/sushilsantou/paperpilot)"},
+    )
+    with urllib.request.urlopen(request, timeout=_PDF_TIMEOUT_SEC) as response:
+        dest.write_bytes(response.read())
 
 RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,9 +63,11 @@ def fetch_papers(query: str, max_results: int = 40) -> List[PaperMeta]:
         pdf_path = RAW_DIR / f"{arxiv_id}.pdf"
         try:
             if not pdf_path.exists():
-                result.download_pdf(dirpath=str(RAW_DIR), filename=f"{arxiv_id}.pdf")
+                _download_pdf(result.pdf_url, pdf_path)
+                time.sleep(_INTER_DOWNLOAD_DELAY_SEC)
         except Exception as e:  # noqa: BLE001 — log and skip, don't kill the whole ingest run
             print(f"  [skip] {arxiv_id}: download failed ({e})")
+            pdf_path.unlink(missing_ok=True)  # don't leave a truncated file for the next run to trust
             continue
 
         papers.append(

@@ -8,6 +8,9 @@ data/processed/
 mlruns/
 mlartifacts/
 qdrant_storage/
+qdrant_local/
 *.egg-info/
 .pytest_cache/
 .DS_Store
+mlflow.db
+mlruns.db

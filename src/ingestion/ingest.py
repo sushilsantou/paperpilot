@@ -17,10 +17,11 @@ from tqdm import tqdm
 from src.config import settings
 from src.ingestion.chunk import chunk_paper, Chunk
 from src.ingestion.embed import embed_texts, embedding_dim
+from src.vectorstore import get_qdrant_client
 
 
 def get_client() -> QdrantClient:
-    return QdrantClient(url=settings.qdrant_url)
+    return get_qdrant_client()
 
 
 def ensure_collection(client: QdrantClient) -> None:

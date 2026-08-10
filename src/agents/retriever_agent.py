@@ -70,11 +70,13 @@ def hybrid_search(
     harness to A/B "vector only" vs "hybrid" retrieval on the same corpus.
     """
     query_vector = embed_texts([search_query])[0].tolist()
-    hits = client.search(
+    # query_points, not the older search(): qdrant-client removed search() in
+    # 1.13. query_points exists from 1.12 onward, so this works across both.
+    hits = client.query_points(
         collection_name=settings.qdrant_collection,
-        query_vector=query_vector,
+        query=query_vector,
         limit=candidate_pool,
-    )
+    ).points
 
     query_kw = _keywords(search_query)
     vector_weight = 1.0 - keyword_weight

@@ -23,6 +23,7 @@ from qdrant_client import QdrantClient
 from src.agents.graph import answer_question
 from src.config import settings
 from src.eval.metrics import citation_validity_rate, has_citations, keyword_recall
+from src.vectorstore import get_qdrant_client
 
 EVAL_SET_PATH = Path(__file__).parent / "eval_set.json"
 
@@ -70,7 +71,7 @@ def run_strategy(strategy_name: str, params: dict, eval_set: List[dict], client:
 
 def main():
     eval_set = load_eval_set()
-    client = QdrantClient(url=settings.qdrant_url)
+    client = get_qdrant_client()
 
     mlflow.set_experiment("paperpilot-retrieval-strategies")
 

@@ -10,6 +10,7 @@ from qdrant_client import QdrantClient
 from src.agents.graph import answer_question
 from src.api.schemas import QueryRequest, QueryResponse, SourceRef
 from src.config import settings
+from src.vectorstore import get_qdrant_client
 
 app = FastAPI(
     title="PaperPilot",
@@ -23,7 +24,7 @@ _client: QdrantClient | None = None
 def get_client() -> QdrantClient:
     global _client
     if _client is None:
-        _client = QdrantClient(url=settings.qdrant_url)
+        _client = get_qdrant_client()
     return _client
 
 
