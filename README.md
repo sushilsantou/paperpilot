@@ -81,6 +81,12 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # edit .env and set GOOGLE_API_KEY (get one free at https://aistudio.google.com/apikey)
+#
+# Version note: requirements.txt pins the versions this was written against.
+# RESULTS.md was produced on Python 3.13.14 with unpinned installs resolving to
+# langchain 1.3.14, langgraph 1.2.10, qdrant-client 1.19.0,
+# sentence-transformers 5.7.0, arxiv 4.0.1, mlflow 3.15.1. Install unpinned if
+# the pinned set fails on your Python.
 
 docker compose up -d qdrant     # or: docker run -p 6333:6333 qdrant/qdrant
 ```
