@@ -18,7 +18,7 @@ The verdict decides where the graph goes next:
 import json
 import re
 
-from src.agents.llm import get_llm
+from src.agents.llm import get_llm, invoke_with_retry, message_text
 from src.agents.state import AgentState
 from src.config import settings
 
@@ -74,10 +74,10 @@ def critic_node(state: AgentState) -> AgentState:
     llm = get_llm(temperature=0.0)
     context = _format_context(state.get("retrieved", []))
     prompt = CRITIC_PROMPT.format(question=state["question"], context=context, draft=state["draft_answer"])
-    response = llm.invoke(prompt)
+    response = invoke_with_retry(llm, prompt)
 
     try:
-        judged = _parse_judge_json(response.content)
+        judged = _parse_judge_json(message_text(response))
     except (json.JSONDecodeError, AttributeError):
         # If the judge itself misbehaves, fail open on one retry rather than looping forever.
         judged = {"faithful": True, "issues": "critic response unparseable, defaulting to approve", "sufficient_context": True}

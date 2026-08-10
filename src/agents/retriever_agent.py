@@ -14,7 +14,7 @@ from typing import List
 
 from qdrant_client import QdrantClient
 
-from src.agents.llm import get_llm
+from src.agents.llm import get_llm, invoke_with_retry, message_text
 from src.agents.state import AgentState, RetrievedChunk
 from src.config import settings
 from src.ingestion.embed import embed_texts
@@ -54,8 +54,8 @@ def rewrite_query(question: str, feedback: str = "") -> str:
             f"{feedback}\nAdjust the query to address this gap.\n"
         )
     prompt += "\nRespond with ONLY the search query, no explanation."
-    response = llm.invoke(prompt)
-    return response.content.strip().strip('"')
+    response = invoke_with_retry(llm, prompt)
+    return message_text(response).strip().strip('"')
 
 
 def hybrid_search(

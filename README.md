@@ -141,8 +141,13 @@ run the same in CI as they do locally.
 recall against 0.88 for pure vector search — a small gain on a small eval set, and RESULTS.md
 argues explicitly against over-reading it.
 
-Still unmeasured: everything requiring `GOOGLE_API_KEY` — query rewriting, synthesis, and the
-critic's faithfulness judging, and therefore citation validity and critic-retry counts.
+The LLM half has been **run but not measured**. With a real Gemini key the full pipeline executes
+end-to-end — query rewriting, hybrid retrieval, synthesis with inline `[arxiv:...]` citations, and
+the critic loop routing work back for re-retrieval — but the eval hit the free tier's cap of
+20 requests/day/model after **1 of 48 questions** (it needs ~430, since each critic retry re-runs
+rewrite + synthesis + critic). So citation-validity rate, citation-presence rate, average retries,
+and latency remain unmeasured at any real sample size. One question is not a result and is not
+quoted as one. Details in [RESULTS.md](RESULTS.md).
 
 This project was originally scaffolded in a sandboxed environment without outbound network access
 to Hugging Face, Docker Hub, or arXiv.org, so the embedding-model download, live Qdrant container,

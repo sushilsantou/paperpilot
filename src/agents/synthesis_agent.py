@@ -7,7 +7,7 @@ the critic's job to *verification*, not formatting cleanup.
 import re
 from typing import List
 
-from src.agents.llm import get_llm
+from src.agents.llm import get_llm, invoke_with_retry, message_text
 from src.agents.state import AgentState, RetrievedChunk
 
 
@@ -44,8 +44,8 @@ def synthesis_node(state: AgentState) -> AgentState:
     llm = get_llm(temperature=0.2)
     context = _format_context(state.get("retrieved", []))
     prompt = SYNTHESIS_PROMPT.format(question=state["question"], context=context)
-    response = llm.invoke(prompt)
-    draft = response.content.strip()
+    response = invoke_with_retry(llm, prompt)
+    draft = message_text(response).strip()
     return {
         **state,
         "draft_answer": draft,

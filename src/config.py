@@ -12,7 +12,11 @@ load_dotenv()
 class Settings:
     # LLM
     google_api_key: str = os.getenv("GOOGLE_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    # gemini-1.5-flash was retired (404 from the API). gemini-3.5-flash is a
+    # current stable model that still honours temperature — gemini-3.6-flash
+    # uses fixed sampling defaults and silently ignores it, which would make a
+    # temperature=0 eval non-reproducible.
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
     # Embeddings — local model, no API key required
     embedding_model: str = os.getenv(

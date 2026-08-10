@@ -16,3 +16,4 @@ qdrant_local/
 .DS_Store
 mlflow.db
 mlruns.db
+eval_results.json

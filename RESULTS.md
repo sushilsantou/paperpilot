@@ -61,18 +61,66 @@ overlap dominates the blend.
   (the first `hybrid_search` pays for lazily loading the embedding model — it
   inflated the first strategy's latency ~6x before warmup was added).
 
-## Still to run
+## The full agent eval: attempted, quota-blocked at n=1
 
-Requires `GOOGLE_API_KEY`:
+`run_eval.py` was run against a real Gemini key on 2026-08-10. It completed
+**one question of forty-eight** before hitting the free tier's daily cap:
 
-```bash
-QDRANT_PATH=./qdrant_local python -m src.eval.run_eval
+```
+[vector_only] q1: recall=0.80  citation_validity=1.00  retries=2  latency=38.0s
 ```
 
-That produces citation-validity rate, citation-presence rate, average critic
-retries, and end-to-end latency per strategy — the metrics that actually
-exercise the two-stage hallucination gate, which is the part of this project
-worth talking about.
+```
+429 RESOURCE_EXHAUSTED — GenerateRequestsPerDayPerProjectPerModel-FreeTier
+quotaValue: 20, model: gemini-3.5-flash
+```
+
+The free tier allows **20 requests per day per model**. This eval needs roughly
+430: each question costs ~3 calls (query rewrite → synthesis → critic), and the
+critic's retry loop re-runs all three per retry, with 2 retries observed.
+
+**That single data point is not a result and is not quoted as one anywhere.**
+Citation validity of 1.00 on one question is consistent with the deterministic
+gate working, and it is also exactly what you would see by chance on an easy
+question. n=1 measures nothing. The pipeline is *verified to run end-to-end* —
+real query rewriting, real hybrid retrieval, real synthesis with inline
+`[arxiv:...]` citations, a real critic loop routing work back for
+re-retrieval — but citation-validity rate, citation-presence rate, average
+retries, and latency remain **unmeasured** at any meaningful sample size.
+
+Completing it needs a billing-enabled key (the whole eval is roughly $0.05–0.20
+of `flash-lite` tokens) or roughly a week of daily-quota slices:
+
+```bash
+python -m src.eval.run_eval                              # full 4 x 12
+python -m src.eval.run_eval --limit 2 --strategies hybrid  # a quota-sized slice
+```
+
+### One thing the attempt did surface
+
+`retry_count` came back as **2–3 against `max_critic_retries=2`**, on both the
+smoke test and q1. The critic is rejecting drafts aggressively, and the retry
+bound may be off by one — worth investigating before reading anything into a
+future retries-per-question average, since it triples the LLM cost per
+question.
+
+## Compatibility fixes this attempt required
+
+None of these were visible until real API calls were made:
+
+- **`gemini-1.5-flash` is retired** — returns 404 `NOT_FOUND` from the API.
+  Default is now `gemini-3.5-flash`, chosen over the newer `gemini-3.6-flash`
+  because 3.6 uses fixed sampling defaults and **silently ignores
+  `temperature`**, which would make a `temperature=0` eval non-reproducible.
+- **`langchain-google-genai` changed `.content` from `str` to a list of content
+  blocks** (`[{'type': 'text', 'text': ...}]`), so `.content.strip()` raised
+  `AttributeError: 'list' object has no attribute 'strip'` in all three agents.
+  `src/agents/llm.py::message_text()` now normalises this in one place and
+  still accepts the old string form.
+- **No rate-limit handling at all.** `invoke_with_retry()` now backs off on 429
+  honouring the server's `retryDelay`, but fails fast on a *per-day* cap rather
+  than sleeping for hours, and `run_eval.py` keeps partial results with an
+  explicit `questions_completed` count instead of losing the whole run.
 
 ## Fixes this run required
 
