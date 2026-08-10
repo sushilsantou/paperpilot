@@ -128,9 +128,19 @@ run the same in CI as they do locally.
 
 ## A note on how this was validated
 
-This project was scaffolded and built in a sandboxed environment without outbound network access
+**Updated 2026-08-10 — the retrieval half has now been run for real:** 40 arXiv papers fetched,
+487 chunks embedded and indexed into Qdrant, and all four retrieval strategies swept over the
+12-question eval set. Numbers, caveats, and the two upstream API breakages this surfaced are in
+[RESULTS.md](RESULTS.md). Headline: hybrid vector/keyword retrieval reached 0.90 average keyword
+recall against 0.88 for pure vector search — a small gain on a small eval set, and RESULTS.md
+argues explicitly against over-reading it.
+
+Still unmeasured: everything requiring `GOOGLE_API_KEY` — query rewriting, synthesis, and the
+critic's faithfulness judging, and therefore citation validity and critic-retry counts.
+
+This project was originally scaffolded in a sandboxed environment without outbound network access
 to Hugging Face, Docker Hub, or arXiv.org, so the embedding-model download, live Qdrant container,
-and real Gemini calls couldn't be exercised end-to-end there. What *was* verified in that
+and real Gemini calls couldn't be exercised end-to-end there. What was verified in that
 environment, with real (not mocked) libraries:
 
 - All 15 unit tests passing (chunking, metrics, keyword scoring)
@@ -144,9 +154,9 @@ environment, with real (not mocked) libraries:
   Google's now-sunset `google.generativeai` SDK; upgraded the whole LangChain/LangGraph stack to the
   current major versions built on `google.genai`)
 
-The one thing that still needs a live run with your own Gemini API key and normal network access is
-the LLM-dependent path itself — query rewriting, synthesis, and the critic's faithfulness judging.
-Everything around it has already been exercised.
+Everything around the LLM path has since been exercised for real (see above). The LLM-dependent
+path itself — query rewriting, synthesis, and the critic's faithfulness judging — still needs a
+live run with your own Gemini API key.
 
 ## Roadmap / stretch goals
 
