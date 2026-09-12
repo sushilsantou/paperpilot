@@ -91,7 +91,7 @@ src/
   api/
     main.py                 # FastAPI app (/health, /query)
     schemas.py              # request/response models
-tests/                      # pytest — 27 tests, none needing a key, a server, or network
+tests/                      # pytest — 28 tests, none needing a key, a server, or network
 ```
 
 ## Setup
@@ -149,7 +149,8 @@ python -m src.eval.run_retrieval_eval
 
 # 4b. Full agent eval — needs a key, and ~430 requests against a 20/day free tier
 python -m src.eval.run_eval
-python -m src.eval.run_eval --limit 2 --strategies hybrid   # a quota-sized slice
+python -m src.eval.run_eval --limit 2 --strategies hybrid              # a quota-sized slice
+python -m src.eval.run_eval --offset 2 --limit 2 --strategies hybrid   # the next slice tomorrow
 
 mlflow ui   # open http://localhost:5000 to compare strategies
 ```
@@ -166,11 +167,11 @@ offline: if it passes, everything except the model calls themselves works.
 pytest tests/ -v
 ```
 
-**27 tests, none of which need a Gemini key, a Qdrant server, or network access** — so they run the
+**28 tests, none of which need a Gemini key, a Qdrant server, or network access** — so they run the
 same in CI as they do locally. They split into two kinds:
 
-- **19 pure-function tests** — chunking windows/overlap, keyword-recall scoring, citation validity,
-  keyword extraction, eval aggregation.
+- **20 pure-function tests** — chunking windows/overlap, keyword-recall scoring, citation validity,
+  keyword extraction, eval aggregation, critic/synthesis context parity.
 - **8 tests that drive the real pipeline** — the actual LangGraph state machine, the critic's
   structural check, the retry loop and Qdrant search, against an in-memory Qdrant. Only the LLM and
   the embedding model are stubbed, because they are the only two things here that need credentials
@@ -197,6 +198,13 @@ every metric, at ~2.3x the latency. It is committed as a measured negative rathe
 with the caveat that keyword recall is structurally poor at crediting a strategy whose purpose is
 reaching differently-worded papers — see
 [RESULTS.md](RESULTS.md#graph-expanded-retrieval-a-measured-null-result).
+
+**Updated 2026-09-12 — the live agent runs found a real bug.** Both eval questions run against a
+live key came back `unverified`: the critic rejected every answer. The cause was not a strict judge
+but a context mismatch — the critic truncated each chunk to 500 chars while synthesis saw all 800,
+so it was ruling on 62% of the evidence the draft was written from. After the fix, q1 went from
+never-approved after 2 retries (78.4s) to approved on the first pass (14.7s). Details in
+[RESULTS.md](RESULTS.md#2026-09-12-the-critic-was-rejecting-everything-and-it-was-right-to).
 
 The LLM half has been **run but not measured**. With a real Gemini key the full pipeline executes
 end-to-end — query rewriting, hybrid retrieval, synthesis with inline `[arxiv:...]` citations, and

@@ -3,18 +3,32 @@
 First run against a real corpus, 2026-08-10. Every number below came from a
 command in this repo; nothing is estimated.
 
-**Scope, stated up front:** what is measured here is the *retrieval* half of
-the system — the part that needs no LLM. The full agent pipeline (LLM query
+**Scope, stated up front:** what is fully measured here is the *retrieval* half
+of the system — the part that needs no LLM. The full agent pipeline (LLM query
 rewriting → synthesis → critic) has been **run end-to-end against a live Gemini
-key but not measured**: the eval hit the free tier's daily cap after 1 of 48
-questions. Citation validity, critic-retry counts and end-to-end latency
-therefore remain unmeasured at any meaningful sample size. Details in
-[The full agent eval](#the-full-agent-eval-attempted-quota-blocked-at-n1).
+key but not measured at scale**: the free tier's 20-requests/day cap against an
+eval needing ~430 means it has only ever been sampled a few questions at a time.
+Citation-validity *rates*, approval rates and latency distributions remain
+unmeasured. Details in
+[The full agent eval](#the-full-agent-eval-sampled-never-completed).
 
-Two results are reported below that did not come out the way the design
-intended — graph-expanded retrieval measured as no improvement, and the critic's
-retry bound turned out to be an unbounded loop rather than the off-by-one it
-first looked like. Both are here rather than quietly dropped.
+Those few live questions were not wasted, though. They are what surfaced the
+critic/synthesis context mismatch below — a bug that made the citation gate
+reject every answer it was given. The offline suite could not see it: the stub
+judge returns a scripted verdict regardless of what context it is handed, so a
+judge starved of evidence behaves identically to a well-fed one. The fix is now
+guarded offline by asserting the two agents' context formatters agree, which is
+a check that could have been written in advance — but only by someone who
+already suspected the mismatch. A live run is what raised the suspicion.
+
+**Three results below did not come out the way the design intended**, and all
+three are reported rather than quietly dropped:
+
+1. Graph-expanded retrieval measured as **no improvement** at 2.3x the latency.
+2. The critic's retry bound was not the off-by-one it first looked like — it was
+   an **unbounded loop**, 5003 model calls from one question.
+3. The critic was **rejecting every answer**, because it was shown 62% of the
+   evidence the draft was written from.
 
 ## Corpus
 
@@ -123,7 +137,7 @@ appear on more than one paper, so co-authorship connects almost nothing.
 Categories carry nearly all the connectivity, and they are coarse — `cs.IR`
 alone covers 29 of the 40 papers, so it barely discriminates.
 
-## The full agent eval: attempted, quota-blocked at n=1
+## The full agent eval: sampled, never completed
 
 `run_eval.py` was run against a real Gemini key on 2026-08-10. It completed
 **one question of forty-eight** before hitting the free tier's daily cap:
@@ -142,6 +156,8 @@ The free tier allows **20 requests per day per model**. This eval needs roughly
 critic's retry loop re-runs all three per retry, with 2 retries observed.
 
 **That single data point is not a result and is not quoted as one anywhere.**
+(It is also now known to have been an *unverified* answer — `retries=2` is the
+retry cap, so the critic never approved it. See the 2026-09-12 section above.)
 Citation validity of 1.00 on one question is consistent with the deterministic
 gate working, and it is also exactly what you would see by chance on an easy
 question. n=1 measures nothing. The pipeline is *verified to run end-to-end* —
@@ -167,6 +183,52 @@ context routes back to the retriever rather than to synthesis, and that the
 retry loop is bounded. That is how the unbounded-loop bug below was reproduced
 and fixed despite the eval itself being quota-blocked. What remains unmeasured
 is the *quality* of real model output, not whether the machinery works.
+
+### 2026-09-12: the critic was rejecting everything, and it was right to
+
+Two questions were run live against `hybrid` on the fixed retry bound. **Both
+hit `max_critic_retries` and came back unverified:**
+
+```
+[hybrid] q1: recall=1.00 citation_validity=1.00 retries=2 latency=78.4s  [UNVERIFIED]
+[hybrid] q2: recall=1.00 citation_validity=0.67 retries=2 latency=34.1s  [UNVERIFIED]
+```
+
+`unverified_rate` was **1.00** — the critic never approved anything. Note q1:
+citation validity of 1.00 on an answer that was never approved. Under the
+pre-`unverified` code this would have been logged as `approved` with perfect
+citation validity, which is precisely the misreading the metric was added to
+prevent. It earned its place on the first live question.
+
+**The cause was a context mismatch, not a strict judge.** The critic truncated
+every chunk to `text[:500]` while synthesis received the full text. Chunks are
+800 characters, so the judge was ruling on 62% of the evidence the draft was
+written from: any claim drawn from the tail of a chunk looked unsupported
+because the supporting sentence was never in the judge's prompt. The critic was
+being shown less than the writer and rejecting the difference.
+
+Re-running q1 after the fix — same question, same strategy, same corpus:
+
+| | retries | latency | verdict | citation validity |
+|---|---|---|---|---|
+| before | 2 | 78.4 s | **unverified** | 1.00 (never approved) |
+| after | **0** | **14.7 s** | **approved, first pass** | 1.00 (verified) |
+
+Approved on the first pass instead of never, and **5.3x faster** because the
+retry loop is gone. The retries were not buying quality; they were re-running
+the whole pipeline against a judge that could not see the evidence.
+
+**What this is and is not.** It is a controlled before/after on one fixed
+question, and it points one way. It is **not** a measured approval rate: n=1
+after the fix, and q2's re-run was blocked when the daily quota ran out
+mid-question — the harness stopped cleanly with `questions_completed: 0` rather
+than losing the run, which is the partial-results handling working as intended.
+An `unverified_rate` across the full 12 questions is still unmeasured.
+
+One retrospective correction this forces: the historical data point quoted
+below (`retries=2`) hit the retry cap, which means it was almost certainly an
+unverified answer reported without that caveat. Its `citation_validity=1.00`
+described an answer the critic never accepted.
 
 ### One thing the attempt did surface — and it was not an off-by-one
 
