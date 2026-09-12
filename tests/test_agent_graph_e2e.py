@@ -139,3 +139,51 @@ def test_critic_survives_an_unparseable_judge_response(client, stub_llm_and_embe
 
     assert result["final_answer"] == draft
     assert result["critic_verdict"] == "approved"
+
+
+def test_repeated_structural_failures_are_bounded(client, stub_llm_and_embeddings):
+    """Regression: the structural check is a rejection path too, so it must obey
+    max_critic_retries.
+
+    It used to return "needs_rewrite" directly, without consulting the cap — the
+    cap check sat after the LLM judge call, which this branch returns before
+    reaching. A synthesis agent that kept fabricating citations therefore looped
+    until LangGraph's recursion limit, thousands of model calls later. The
+    existing bounded-retry test missed it because it only ever drove the
+    *semantic* path, where the cap did apply.
+    """
+    fake = stub_llm_and_embeddings(
+        FakeLLM(
+            drafts=["RAG cuts hallucination by 40% [arxiv:9999.99999]."] * 40,
+            verdicts=[{"faithful": True, "issues": "", "sufficient_context": True}] * 40,
+        )
+    )
+
+    result = answer_question("How does RAG reduce hallucination?", client=client)
+
+    assert result["retry_count"] == settings.max_critic_retries
+    assert result["critic_verdict"] == "unverified"
+    # synthesis runs once per attempt: the initial draft plus one per retry
+    assert fake.calls["synthesis"] == settings.max_critic_retries + 1
+    # the judge is never consulted — every draft dies at the structural gate
+    assert fake.calls["critic"] == 0
+    # the caveat must name the fabricated ID, not just say "unverified"
+    assert "9999.99999" in result["final_answer"]
+
+
+def test_giving_up_is_not_reported_as_approved(client, stub_llm_and_embeddings):
+    """Regression: hitting the retry cap used to set critic_verdict="approved",
+    making the field that records whether the citation gate passed say the
+    opposite of what happened."""
+    draft = "RAG grounds answers in retrieved evidence [arxiv:2401.00001]."
+    stub_llm_and_embeddings(
+        FakeLLM(
+            drafts=[draft] * 10,
+            verdicts=[{"faithful": False, "issues": "unsupported claim", "sufficient_context": True}] * 10,
+        )
+    )
+
+    result = answer_question("How does RAG reduce hallucination?", client=client)
+
+    assert result["critic_verdict"] == "unverified"
+    assert "unsupported claim" in result["final_answer"]

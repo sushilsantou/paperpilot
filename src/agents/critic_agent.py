@@ -10,10 +10,15 @@ returned to the caller —
 
 The verdict decides where the graph goes next:
 - "approved"         -> done, return draft as final_answer
+- "unverified"       -> done, but the retry cap was hit before the draft ever
+                        passed; returned with a caveat naming the last issue
 - "needs_retrieval"  -> context was insufficient; retriever runs again with
                         the critic's feedback folded into a query rewrite
 - "needs_rewrite"    -> context was fine but the draft misused/ignored it;
                         synthesis runs again against the same chunks
+
+Every rejection routes through _reject(), which owns the retry bound. Adding a
+new rejection reason means calling it, not returning a verdict directly.
 """
 import json
 import re
@@ -59,17 +64,59 @@ def _parse_judge_json(raw: str) -> dict:
     return json.loads(cleaned)
 
 
+def _give_up(state: AgentState, retry_count: int, feedback: str) -> AgentState:
+    """
+    Terminal exit when the critic has rejected `max_critic_retries` times.
+
+    The verdict is "unverified", not "approved": the answer is being returned
+    because we ran out of attempts, not because it passed. Reporting that as
+    "approved" would make the one field that records whether the citation gate
+    succeeded say the opposite of what happened.
+
+    The caveat carries the last rejection reason, so a caller can tell "the
+    judge was unconvinced" apart from the far more serious "the draft cites a
+    source that does not exist" — the latter ships a fabricated citation, and
+    the reader needs to know which IDs are suspect.
+    """
+    caveat = (
+        "\n\n*(Note: this answer could not be fully verified against sources "
+        f"after {retry_count} retries. Last issue: {feedback or 'unspecified'})*"
+    )
+    return {
+        **state,
+        "critic_verdict": "unverified",
+        "critic_feedback": feedback,
+        "retry_count": retry_count,
+        "final_answer": state["draft_answer"] + caveat,
+    }
+
+
+def _reject(state: AgentState, retry_count: int, verdict: str, feedback: str) -> AgentState:
+    """
+    The single bounded exit for every rejection, structural or semantic.
+
+    Both paths must go through here. Previously the structural branch returned
+    "needs_rewrite" directly without consulting the retry cap, so a synthesis
+    agent that kept fabricating citations looped forever: the cap check lived
+    after the LLM judge call, which that branch returns before reaching. It was
+    bounded only by LangGraph's recursion limit, thousands of model calls later.
+    """
+    if retry_count >= settings.max_critic_retries:
+        return _give_up(state, retry_count, feedback)
+    return {
+        **state,
+        "critic_verdict": verdict,
+        "critic_feedback": feedback,
+        "retry_count": retry_count + 1,
+    }
+
+
 def critic_node(state: AgentState) -> AgentState:
     retry_count = state.get("retry_count", 0)
 
     structural_issue = _structural_check(state)
     if structural_issue:
-        return {
-            **state,
-            "critic_verdict": "needs_rewrite",
-            "critic_feedback": structural_issue,
-            "retry_count": retry_count + 1,
-        }
+        return _reject(state, retry_count, "needs_rewrite", structural_issue)
 
     llm = get_llm(temperature=0.0)
     context = _format_context(state.get("retrieved", []))
@@ -85,19 +132,5 @@ def critic_node(state: AgentState) -> AgentState:
     if judged.get("faithful") and judged.get("sufficient_context", True):
         return {**state, "critic_verdict": "approved", "critic_feedback": "", "final_answer": state["draft_answer"]}
 
-    if retry_count >= settings.max_critic_retries:
-        # Stop looping — return the best draft we have, but flag it wasn't fully verified.
-        caveat = "\n\n*(Note: this answer could not be fully verified against sources after multiple attempts.)*"
-        return {
-            **state,
-            "critic_verdict": "approved",
-            "final_answer": state["draft_answer"] + caveat,
-        }
-
     verdict = "needs_retrieval" if not judged.get("sufficient_context", True) else "needs_rewrite"
-    return {
-        **state,
-        "critic_verdict": verdict,
-        "critic_feedback": judged.get("issues", ""),
-        "retry_count": retry_count + 1,
-    }
+    return _reject(state, retry_count, verdict, judged.get("issues", ""))

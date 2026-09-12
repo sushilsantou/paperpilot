@@ -26,7 +26,9 @@ from src.vectorstore import get_qdrant_client
 
 def _route_after_critic(state: AgentState) -> str:
     verdict = state.get("critic_verdict")
-    if verdict == "approved":
+    # "unverified" is the critic giving up at the retry cap. It is terminal:
+    # routing it anywhere but END would restart the loop it exists to stop.
+    if verdict in ("approved", "unverified"):
         return END
     if verdict == "needs_retrieval":
         return "retriever"
