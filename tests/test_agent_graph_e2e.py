@@ -187,3 +187,29 @@ def test_giving_up_is_not_reported_as_approved(client, stub_llm_and_embeddings):
 
     assert result["critic_verdict"] == "unverified"
     assert "unsupported claim" in result["final_answer"]
+
+
+def test_critic_judges_against_the_same_evidence_synthesis_saw():
+    """Regression: the critic used to truncate each chunk to text[:500] while
+    synthesis saw the whole thing. Chunks are 800 chars, so the judge ruled on
+    62% of the evidence and rejected claims whose support it was never shown --
+    which is a structural cause of a 100% rejection rate, not a strict judge.
+    """
+    import src.agents.critic_agent as critic_mod
+    import src.agents.synthesis_agent as synthesis_mod
+    from src.config import settings
+
+    tail = "THE-SUPPORTING-SENTENCE-LIVES-HERE"
+    chunk = {
+        "text": "x" * settings.chunk_size + tail,
+        "source_id": "2401.00001",
+        "source_title": "Paper",
+        "chunk_index": 0,
+        "score": 1.0,
+    }
+
+    critic_context = critic_mod._format_context([chunk])
+    synthesis_context = synthesis_mod._format_context([chunk])
+
+    assert tail in critic_context, "critic is judging against truncated evidence"
+    assert tail in synthesis_context

@@ -46,7 +46,19 @@ properly answer the question (as opposed to the draft simply doing a bad job wit
 
 
 def _format_context(retrieved) -> str:
-    return "\n\n".join(f"[arxiv:{c['source_id']}] {c['text'][:500]}" for c in retrieved)
+    """
+    The critic must see exactly the evidence synthesis saw.
+
+    This used to truncate to `text[:500]`. Chunks are 800 characters
+    (settings.chunk_size), so the judge was ruling on 62% of the evidence the
+    draft was written from, and any claim drawn from the tail of a chunk looked
+    unsupported because the supporting sentence was not in the prompt. The judge
+    was right to reject; it was being shown less than the writer.
+
+    Cost is not a reason to reintroduce the cap: top_k=5 chunks at 800 chars is
+    ~4k characters of context, which is negligible for the model in use.
+    """
+    return "\n\n".join(f"[arxiv:{c['source_id']}] {c['text']}" for c in retrieved)
 
 
 def _structural_check(state: AgentState) -> str:
