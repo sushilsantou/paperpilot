@@ -61,25 +61,33 @@ fraction of expected keywords appearing anywhere in the retrieved chunks.
 questions from 6/12 to 7/12, at roughly 1.5x the retrieval latency.**
 
 **Reproducibility.** The recall and perfect-recall columns reproduced *exactly*
-across three separate runs of this sweep on the same corpus. The latency column
-did not — for the four hybrid rows:
+across four separate runs of this sweep on the same corpus — every run returned
+0.8833 / 0.8833 / 0.9000 / 0.9000 and 6 / 7 / 7 / 7. The latency column did not:
 
 | run | vector_only | hybrid_light | hybrid | hybrid_heavy |
 |---|---|---|---|---|
 | 1 (4 strategies) | 25.8 | 34.3 | 40.8 | 33.9 |
 | 2 (7 strategies, table above) | 17.7 | 28.5 | 27.4 | 26.1 |
 | 3 (7 strategies) | 10.1 | 15.4 | 14.1 | 12.6 |
+| 4 (7 strategies) | 8.8 | 13.9 | 13.8 | 14.8 |
 
 Retrieval is deterministic, so recall is stable by construction; latency is
-wall-clock on a shared CPU and moves by more than 2x across runs. **Do not read
-latency differences under ~2x as signal.** Notably, run 1 ranks `hybrid` as the
-*slowest* of the four and run 3 ranks it second-fastest — the within-run
+wall-clock on a shared CPU and moves by more than 4x across runs (25.8 ms to
+8.8 ms on the same row). **Do not read latency differences under ~2x as
+signal.** Notably, run 1 ranks `hybrid` as the *slowest* of the four, run 3
+ranks it second-fastest, and run 4 ranks it second-slowest — the within-run
 ordering of those rows is noise.
 
-What did survive all three runs is the graph/hybrid gap: 63.4 vs 27.4 ms in run
-2 and 30.6 vs 14.1 ms in run 3, i.e. **2.2-2.3x in both**. That ratio is stable
-even though the absolute numbers are not, which is why it is quoted as a ratio
-below and not as a millisecond figure.
+What survived every run is the graph/hybrid gap: 63.4 vs 27.4 ms in run 2,
+30.6 vs 14.1 in run 3, 30.7 vs 13.8 in run 4 — **2.2-2.3x each time**. That
+ratio is stable even though the absolute numbers are not, which is why it is
+quoted as a ratio below and not as a millisecond figure.
+
+This sweep has no LLM in it — it feeds raw question text to `hybrid_search` and
+never constructs an agent — so none of the agent-side fixes (the retry bound,
+the critic context mismatch) can move these numbers, and re-running after them
+confirms that they do not. The caveat below about missing query rewriting is the
+same point from the other direction.
 
 Reading this honestly: it is a **small** improvement on a **small** eval set.
 One additional question reaching perfect recall out of twelve is a single-item
