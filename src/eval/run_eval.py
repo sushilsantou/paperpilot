@@ -123,14 +123,23 @@ def main():
     parser = argparse.ArgumentParser(description="Full agent eval across retrieval strategies")
     parser.add_argument("--limit", type=int, default=None,
                         help="only run the first N questions (the free Gemini tier caps requests per day)")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="skip the first N questions. With --limit, this is what makes the eval "
+                             "resumable across days: the free tier's cap is per day, so a full run "
+                             "has to be accumulated in slices, and without an offset every slice "
+                             "would re-run q1 and never reach the rest of the set.")
     parser.add_argument("--strategies", default=None,
                         help="comma-separated subset, e.g. vector_only,hybrid")
     parser.add_argument("--out", default="eval_results.json", help="where to write results")
     args = parser.parse_args()
 
     eval_set = load_eval_set()
+    if args.offset:
+        eval_set = eval_set[args.offset :]
     if args.limit:
         eval_set = eval_set[: args.limit]
+    if not eval_set:
+        parser.error(f"--offset {args.offset} skips the entire eval set")
 
     chosen = STRATEGIES
     if args.strategies:
@@ -166,8 +175,12 @@ def main():
         print("\nNOTE: stopped early on API quota. Numbers above cover only the "
               "questions listed as questions_completed — do not read them as a full run.")
 
+    # question_ids is recorded because a quota-sliced run only covers part of the
+    # set: without it, two slice files are indistinguishable from two runs of the
+    # same questions, and merging them later would silently double-count.
     Path(args.out).write_text(json.dumps(
         {"model": settings.gemini_model, "questions_per_strategy": len(eval_set),
+         "question_ids": [item["id"] for item in eval_set],
          "stopped_early": stopped_early, "results": summary}, indent=2))
     print(f"Wrote {args.out}")
 
