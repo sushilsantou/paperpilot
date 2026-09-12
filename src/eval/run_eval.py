@@ -49,22 +49,40 @@ class PartialRun(Exception):
         self.summary = summary
 
 
-def _summarise(recalls, citation_rates, latencies, retries, cited_flags, completed: int) -> dict:
-    if not recalls:
+def _summarise(records: List[dict]) -> dict:
+    """
+    Aggregate per-question records. One record per completed question, so a
+    quota-truncated run summarises exactly what it scored.
+    """
+    if not records:
         return {"questions_completed": 0}
-    return {
-        "questions_completed": completed,
-        "avg_keyword_recall": mean(recalls),
-        "avg_citation_validity": mean(citation_rates),
-        "avg_latency_sec": mean(latencies),
-        "avg_retries": mean(retries),
-        "citation_presence_rate": mean(cited_flags),
+
+    # An answer the critic gave up on still has a citation-validity score, and
+    # pooling the two hides the distinction: a run where a third of answers
+    # never passed the gate can report the same avg_citation_validity as one
+    # where all of them did. The rate says how much of the pool is unverified;
+    # the _verified suffix reports the metric on answers that actually passed.
+    verified = [r for r in records if not r["unverified"]]
+
+    summary = {
+        "questions_completed": len(records),
+        "avg_keyword_recall": mean(r["recall"] for r in records),
+        "avg_citation_validity": mean(r["citation_validity"] for r in records),
+        "avg_latency_sec": mean(r["latency"] for r in records),
+        "avg_retries": mean(r["retries"] for r in records),
+        "citation_presence_rate": mean(r["has_citations"] for r in records),
+        "unverified_rate": mean(1.0 if r["unverified"] else 0.0 for r in records),
     }
+    # Omitted rather than zero-filled when every answer hit the retry cap:
+    # MLflow takes any number at face value, and 0.0 would read as "validity
+    # collapsed" instead of "no verified answers to measure".
+    if verified:
+        summary["avg_citation_validity_verified"] = mean(r["citation_validity"] for r in verified)
+    return summary
 
 
 def run_strategy(strategy_name: str, params: dict, eval_set: List[dict], client: QdrantClient) -> dict:
-    recalls, citation_rates, latencies, retries, cited_flags = [], [], [], [], []
-    completed = 0
+    records: List[dict] = []
 
     for item in eval_set:
         start = time.time()
@@ -74,24 +92,31 @@ def run_strategy(strategy_name: str, params: dict, eval_set: List[dict], client:
             # A daily cap mid-run must not throw away the questions already
             # scored. Report what completed and let main() stop cleanly.
             print(f"  [{strategy_name}] stopped at {item['id']}: {e}")
-            raise PartialRun(_summarise(recalls, citation_rates, latencies, retries, cited_flags, completed)) from e
+            raise PartialRun(_summarise(records)) from e
         elapsed = time.time() - start
 
         retrieved = result.get("retrieved", [])
         cited_ids = result.get("source_ids_cited", [])
         final_answer = result.get("final_answer", "")
 
-        recalls.append(keyword_recall(retrieved, item["expected_keywords"]))
-        citation_rates.append(citation_validity_rate(cited_ids, retrieved))
-        latencies.append(elapsed)
-        retries.append(result.get("retry_count", 0))
-        cited_flags.append(1.0 if has_citations(final_answer) else 0.0)
+        records.append({
+            "recall": keyword_recall(retrieved, item["expected_keywords"]),
+            "citation_validity": citation_validity_rate(cited_ids, retrieved),
+            "latency": elapsed,
+            "retries": result.get("retry_count", 0),
+            "has_citations": 1.0 if has_citations(final_answer) else 0.0,
+            # The critic hit max_critic_retries without ever approving this
+            # draft, so it was returned with a caveat rather than passing.
+            "unverified": result.get("critic_verdict") == "unverified",
+        })
 
-        completed += 1
-        print(f"  [{strategy_name}] {item['id']}: recall={recalls[-1]:.2f} "
-              f"citation_validity={citation_rates[-1]:.2f} retries={retries[-1]} latency={elapsed:.1f}s")
+        last = records[-1]
+        print(f"  [{strategy_name}] {item['id']}: recall={last['recall']:.2f} "
+              f"citation_validity={last['citation_validity']:.2f} retries={last['retries']} "
+              f"latency={last['latency']:.1f}s"
+              + ("  [UNVERIFIED]" if last["unverified"] else ""))
 
-    return _summarise(recalls, citation_rates, latencies, retries, cited_flags, completed)
+    return _summarise(records)
 
 
 def main():
