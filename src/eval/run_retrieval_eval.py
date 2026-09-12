@@ -27,16 +27,22 @@ from typing import List
 
 from src.config import settings
 from src.agents.retriever_agent import hybrid_search
+from src.graph.graph_retrieval import get_graph, graph_expanded_search
 from src.eval.metrics import keyword_recall
 from src.vectorstore import get_qdrant_client
 
 EVAL_SET_PATH = Path(__file__).parent / "eval_set.json"
 
+# (keyword_weight, graph_weight). graph_weight=0 is pure hybrid search, so the
+# graph rows are an A/B against identical seeds rather than a different pipeline.
 STRATEGIES = {
-    "vector_only": 0.0,
-    "hybrid_light": 0.15,
-    "hybrid": 0.3,
-    "hybrid_heavy": 0.5,
+    "vector_only": (0.0, 0.0),
+    "hybrid_light": (0.15, 0.0),
+    "hybrid": (0.3, 0.0),
+    "hybrid_heavy": (0.5, 0.0),
+    "graph_light": (0.3, 0.2),
+    "graph": (0.3, 0.4),
+    "graph_heavy": (0.3, 0.6),
 }
 
 
@@ -49,28 +55,42 @@ def run(mlflow_tracking: bool = True) -> dict:
     # entirely on whichever strategy runs first and makes its latency column
     # meaningless (it read ~6x the others before this was added).
     hybrid_search(client, search_query=eval_set[0]["question"], top_k=settings.top_k, keyword_weight=0.0)
+    graph = get_graph()
 
     summary = {}
-    for name, keyword_weight in STRATEGIES.items():
-        recalls, latencies = [], []
+    for name, (keyword_weight, graph_weight) in STRATEGIES.items():
+        recalls, latencies, new_papers = [], [], []
         for item in eval_set:
             start = time.perf_counter()
-            retrieved = hybrid_search(
-                client,
-                search_query=item["question"],
-                top_k=settings.top_k,
-                keyword_weight=keyword_weight,
-            )
+            if graph_weight > 0:
+                retrieved = graph_expanded_search(
+                    client,
+                    search_query=item["question"],
+                    graph=graph,
+                    top_k=settings.top_k,
+                    keyword_weight=keyword_weight,
+                    graph_weight=graph_weight,
+                )
+            else:
+                retrieved = hybrid_search(
+                    client,
+                    search_query=item["question"],
+                    top_k=settings.top_k,
+                    keyword_weight=keyword_weight,
+                )
             latencies.append((time.perf_counter() - start) * 1000.0)
             recalls.append(keyword_recall(retrieved, item["expected_keywords"]))
+            new_papers.append(len({c["source_id"] for c in retrieved}))
 
         summary[name] = {
             "keyword_weight": keyword_weight,
+            "graph_weight": graph_weight,
+            "avg_distinct_papers": round(mean(new_papers), 2),
             "avg_keyword_recall": round(mean(recalls), 4),
             "perfect_recall_questions": sum(1 for r in recalls if r == 1.0),
             "avg_retrieval_latency_ms": round(mean(latencies), 2),
         }
-        print(f"{name:<14} weight={keyword_weight:<5} "
+        print(f"{name:<14} kw={keyword_weight:<5} g={graph_weight:<4} "
               f"recall={summary[name]['avg_keyword_recall']:.4f} "
               f"perfect={summary[name]['perfect_recall_questions']}/{len(eval_set)} "
               f"latency={summary[name]['avg_retrieval_latency_ms']:.1f}ms")
@@ -83,8 +103,10 @@ def run(mlflow_tracking: bool = True) -> dict:
             for name, metrics in summary.items():
                 with mlflow.start_run(run_name=name):
                     mlflow.log_params({"strategy": name, "keyword_weight": metrics["keyword_weight"],
+                                       "graph_weight": metrics["graph_weight"],
                                        "top_k": settings.top_k, "llm_query_rewriting": False})
-                    mlflow.log_metrics({k: v for k, v in metrics.items() if k != "keyword_weight"})
+                    mlflow.log_metrics({k: v for k, v in metrics.items()
+                                        if k not in ("keyword_weight", "graph_weight")})
         except Exception as e:  # noqa: BLE001 — tracking is a convenience, not the result
             print(f"(MLflow logging skipped: {e})")
 
