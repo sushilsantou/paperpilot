@@ -3,7 +3,7 @@ Pulls papers from arXiv for a given search query and downloads their PDFs.
 Uses the official `arxiv` package, which wraps the public arXiv API —
 no API key required.
 """
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List
 import json
@@ -42,6 +42,12 @@ class PaperMeta:
     published: str
     pdf_url: str
     pdf_path: str
+    # Captured for the knowledge graph (src/graph/): arXiv categories are the
+    # densest real edge available here. Co-authorship is far too sparse on a
+    # topic-scoped corpus to connect anything — of 165 authors across 40
+    # papers, only 4 appear on more than one.
+    primary_category: str = ""
+    categories: List[str] = field(default_factory=list)
 
 
 def fetch_papers(query: str, max_results: int = 40) -> List[PaperMeta]:
@@ -79,6 +85,8 @@ def fetch_papers(query: str, max_results: int = 40) -> List[PaperMeta]:
                 published=result.published.isoformat(),
                 pdf_url=result.pdf_url,
                 pdf_path=str(pdf_path),
+                primary_category=getattr(result.primary_category, "term", None) or str(result.primary_category or ""),
+                categories=[getattr(c, "term", None) or str(c) for c in (result.categories or [])],
             )
         )
 
