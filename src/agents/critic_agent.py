@@ -2,11 +2,14 @@
 Critic agent: the faithfulness gate. Runs two checks before anything is
 returned to the caller —
 
-1. Structural: every [arxiv:ID] in the draft must correspond to a chunk that
-   was actually retrieved. A citation to an ID that was never retrieved is
-   an outright hallucination and is caught without needing another LLM call.
+1. Structural: the draft must cite at least one source, and every [arxiv:ID]
+   in it must correspond to a chunk that was actually retrieved. A citation to
+   an ID that was never retrieved is an outright hallucination; a draft with
+   no citations gives the gate nothing to check. Both are caught without
+   needing another LLM call.
 2. Semantic: an LLM-as-judge pass checks whether the draft's claims are
    actually supported by the cited excerpts (not just formatted correctly).
+   A judge response that cannot be parsed is a failed check, not a pass.
 
 The verdict decides where the graph goes next:
 - "approved"         -> done, return draft as final_answer
@@ -49,31 +52,68 @@ def _format_context(retrieved) -> str:
     """
     The critic must see exactly the evidence synthesis saw.
 
-    This used to truncate to `text[:500]`. Chunks are 800 characters
-    (settings.chunk_size), so the judge was ruling on 62% of the evidence the
-    draft was written from, and any claim drawn from the tail of a chunk looked
-    unsupported because the supporting sentence was not in the prompt. The judge
-    was right to reject; it was being shown less than the writer.
+    This used to truncate to `text[:500]`. Chunks are 800 *words*
+    (settings.chunk_size is a word count; see src/ingestion/chunk.py), a median
+    of 5,496 characters across the indexed corpus, so the judge saw about a
+    tenth of each chunk. Any claim drawn from past the first few sentences
+    looked unsupported because the supporting text was not in the prompt. The
+    judge was right to reject; it was being shown less than the writer.
 
-    Cost is not a reason to reintroduce the cap: top_k=5 chunks at 800 chars is
-    ~4k characters of context, which is negligible for the model in use.
+    Cost is not a reason to reintroduce the cap: top_k=5 chunks is roughly 27k
+    characters (~7k tokens) of context, well inside the model's window, and a
+    judge that sees less than the writer is not checking the draft.
     """
     return "\n\n".join(f"[arxiv:{c['source_id']}] {c['text']}" for c in retrieved)
 
 
-def _structural_check(state: AgentState) -> str:
-    retrieved_ids = {c["source_id"] for c in state.get("retrieved", [])}
+def _structural_check(state: AgentState) -> tuple[str, str] | None:
+    """
+    Deterministic citation checks, run before the LLM judge. Returns
+    (verdict, feedback) for a rejection, or None if the draft passes.
+    """
     cited_ids = set(state.get("source_ids_cited", []))
+    if not cited_ids:
+        # Uncited drafts used to pass here: this check only compared cited IDs
+        # against retrieved ones, and an empty set has nothing to compare. The
+        # judge then asked whether claims were *supported*, never whether they
+        # were *cited*, so a citation gate could approve an answer with no
+        # citations at all.
+        #
+        # Routed to the retriever rather than synthesis: a writer that cited
+        # nothing most likely found nothing it could attribute, and a fresh
+        # search guided by this feedback addresses that. Re-drafting against
+        # the same chunks only helps if it merely forgot the citation format.
+        return "needs_retrieval", "Draft cited no sources, so none of its claims could be checked against the excerpts"
+
+    retrieved_ids = {c["source_id"] for c in state.get("retrieved", [])}
     hallucinated = cited_ids - retrieved_ids
     if hallucinated:
-        return f"Draft cites source(s) not present in retrieved context: {sorted(hallucinated)}"
-    return ""
+        return "needs_rewrite", f"Draft cites source(s) not present in retrieved context: {sorted(hallucinated)}"
+    return None
 
 
 def _parse_judge_json(raw: str) -> dict:
-    # Models occasionally wrap JSON in fences despite instructions — strip them.
+    """
+    Parse the judge's verdict, or raise ValueError if it isn't one.
+
+    Tolerates the two common deviations from "ONLY a JSON object": markdown
+    fences, and a sentence of prose around the object. Anything else (no
+    object, or an object without a boolean "faithful") is a malformed verdict.
+    """
     cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-    return json.loads(cleaned)
+    try:
+        judged = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            raise
+        judged = json.loads(match.group(0))
+
+    if not isinstance(judged, dict) or not isinstance(judged.get("faithful"), bool):
+        raise ValueError(f"judge verdict has no boolean 'faithful' field: {raw[:200]!r}")
+    if "sufficient_context" in judged and not isinstance(judged["sufficient_context"], bool):
+        raise ValueError(f"judge verdict has a non-boolean 'sufficient_context': {raw[:200]!r}")
+    return judged
 
 
 def _give_up(state: AgentState, retry_count: int, feedback: str) -> AgentState:
@@ -126,9 +166,10 @@ def _reject(state: AgentState, retry_count: int, verdict: str, feedback: str) ->
 def critic_node(state: AgentState) -> AgentState:
     retry_count = state.get("retry_count", 0)
 
-    structural_issue = _structural_check(state)
-    if structural_issue:
-        return _reject(state, retry_count, "needs_rewrite", structural_issue)
+    structural = _structural_check(state)
+    if structural:
+        verdict, issue = structural
+        return _reject(state, retry_count, verdict, issue)
 
     llm = get_llm(temperature=0.0)
     context = _format_context(state.get("retrieved", []))
@@ -137,9 +178,17 @@ def critic_node(state: AgentState) -> AgentState:
 
     try:
         judged = _parse_judge_json(message_text(response))
-    except (json.JSONDecodeError, AttributeError):
-        # If the judge itself misbehaves, fail open on one retry rather than looping forever.
-        judged = {"faithful": True, "issues": "critic response unparseable, defaulting to approve", "sufficient_context": True}
+    except (ValueError, AttributeError):
+        # An unparseable judge is a failed check, not a passed one. This used
+        # to fail open: prose instead of JSON set faithful=True, the draft came
+        # back "approved", and nothing recorded that the judge never ruled. It
+        # now rejects through _reject() like any other failure, so a judge that
+        # never returns valid JSON ends "unverified" at the cap.
+        #
+        # It routes to synthesis because the graph has no judge-only retry;
+        # that costs one extra synthesis call per malformed verdict.
+        return _reject(state, retry_count, "needs_rewrite",
+                       "Critic response was not a valid JSON verdict, so the draft was not verified")
 
     if judged.get("faithful") and judged.get("sufficient_context", True):
         return {**state, "critic_verdict": "approved", "critic_feedback": "", "final_answer": state["draft_answer"]}

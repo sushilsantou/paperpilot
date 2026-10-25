@@ -55,4 +55,5 @@ def query(req: QueryRequest):
         sources_cited=result.get("source_ids_cited", []),
         retrieved_sources=[SourceRef(**c) for c in result.get("retrieved", [])],
         retries=result.get("retry_count", 0),
+        critic_verdict=result.get("critic_verdict"),
     )

@@ -29,9 +29,10 @@ measured (not vibes-based) retrieval quality — evaluated across strategies and
   `sentence-transformers` model, no API key needed) blended with a keyword-overlap re-rank.
 - **Synthesis agent** — drafts an answer using *only* the retrieved excerpts, with inline
   `[arxiv:ID]` citations required on every claim.
-- **Critic agent** — two-stage check: (1) a structural pass that catches citations to sources that
-  were never retrieved (a cheap, deterministic hallucination check), then (2) an LLM-as-judge pass
-  that verifies the draft's claims are actually supported by the excerpts. Routes back to the
+- **Critic agent** — two-stage check: (1) a structural pass that rejects drafts citing sources that
+  were never retrieved, or citing nothing at all (a cheap, deterministic hallucination check), then
+  (2) an LLM-as-judge pass that verifies the draft's claims are actually supported by the excerpts.
+  A judge reply that can't be parsed counts as a failed check, never a pass. Routes back to the
   retriever (if context was insufficient) or back to synthesis (if the draft misused good context).
 
 Every rejection is bounded by `max_critic_retries`. If the critic never approves, the loop stops
@@ -91,7 +92,7 @@ src/
   api/
     main.py                 # FastAPI app (/health, /query)
     schemas.py              # request/response models
-tests/                      # pytest — 28 tests, none needing a key, a server, or network
+tests/                      # pytest — 32 tests, none needing a key, a server, or network
 ```
 
 ## Setup
@@ -167,20 +168,21 @@ offline: if it passes, everything except the model calls themselves works.
 pytest tests/ -v
 ```
 
-**28 tests, none of which need a Gemini key, a Qdrant server, or network access** — so they run the
-same in CI as they do locally. They split into two kinds:
+**32 tests, none of which need a Gemini key, a Qdrant server, or network access**, so they run the
+same in CI as they do locally. They split into three kinds:
 
-- **20 pure-function tests** — chunking windows/overlap, keyword-recall scoring, citation validity,
-  keyword extraction, eval aggregation, critic/synthesis context parity.
-- **8 tests that drive the real pipeline** — the actual LangGraph state machine, the critic's
+- **22 pure-function tests** — chunking windows/overlap, keyword-recall scoring, citation validity,
+  keyword extraction, eval aggregation, judge-verdict parsing, critic/synthesis context parity.
+- **9 tests that drive the real pipeline** — the actual LangGraph state machine, the critic's
   structural check, the retry loop and Qdrant search, against an in-memory Qdrant. Only the LLM and
   the embedding model are stubbed, because they are the only two things here that need credentials
   or a network (`src/stubs.py`).
+- **1 API contract test** — the critic's verdict reaches the `/query` response.
 
-That second group is the point: it means "the critic rejects a fabricated citation without wasting
-a judge call" and "the retry loop is bounded" are *tested claims* rather than described ones. The
-unbounded-loop bug in RESULTS.md was found and fixed entirely through this path, with the eval
-itself still quota-blocked.
+The pipeline group is the point: it means "the critic rejects a fabricated citation without wasting
+a judge call", "an answer with no citations is never approved" and "the retry loop is bounded" are
+*tested claims* rather than described ones. The unbounded-loop bug in RESULTS.md was found and
+fixed entirely through this path, with the eval itself still quota-blocked.
 
 ## A note on how this was validated
 
@@ -201,10 +203,17 @@ reaching differently-worded papers — see
 
 **Updated 2026-09-12 — the live agent runs found a real bug.** Both eval questions run against a
 live key came back `unverified`: the critic rejected every answer. The cause was not a strict judge
-but a context mismatch — the critic truncated each chunk to 500 chars while synthesis saw all 800,
-so it was ruling on 62% of the evidence the draft was written from. After the fix, q1 went from
-never-approved after 2 retries (78.4s) to approved on the first pass (14.7s). Details in
+but a context mismatch — the critic truncated each chunk to 500 characters while synthesis saw the
+full 800-word chunk (a median of ~5.5k characters), so it was ruling on about a tenth of the
+evidence the draft was written from. After the fix, q1 went from never-approved after 2 retries
+(78.4s) to approved on the first pass (14.7s). Details in
 [RESULTS.md](RESULTS.md#2026-09-12-the-critic-was-rejecting-everything-and-it-was-right-to).
+
+**Updated 2026-10-25 — two ways past the citation gate, closed.** Code review found that an
+unparseable judge reply was treated as an approval, and that a draft with no citations skipped the
+structural check entirely. Both now reject through the bounded retry path, and `/query` returns
+`critic_verdict` so callers can tell an approved answer from an unverified one. Details in
+[RESULTS.md](RESULTS.md#2026-10-25-two-ways-past-the-citation-gate-without-being-checked).
 
 The LLM half has been **run but not measured**. With a real Gemini key the full pipeline executes
 end-to-end — query rewriting, hybrid retrieval, synthesis with inline `[arxiv:...]` citations, and
@@ -233,7 +242,7 @@ environment, with real (not mocked) libraries:
 Everything around the LLM path has since been exercised for real (see above). The LLM-dependent
 path itself — query rewriting, synthesis, and the critic's faithfulness judging — still needs a
 live run with your own Gemini API key to be *measured*. Its **behaviour** no longer depends on one:
-`python -m src.selfcheck` and the 8 pipeline tests exercise the real graph, routing, structural
+`python -m src.selfcheck` and the 9 pipeline tests exercise the real graph, routing, structural
 check and retry bound offline. That is how the unbounded-retry bug was caught and fixed while the
 eval itself remained quota-blocked.
 

@@ -21,14 +21,17 @@ guarded offline by asserting the two agents' context formatters agree, which is
 a check that could have been written in advance — but only by someone who
 already suspected the mismatch. A live run is what raised the suspicion.
 
-**Three results below did not come out the way the design intended**, and all
-three are reported rather than quietly dropped:
+**Four results below did not come out the way the design intended**, and all
+four are reported rather than quietly dropped:
 
 1. Graph-expanded retrieval measured as **no improvement** at 2.3x the latency.
 2. The critic's retry bound was not the off-by-one it first looked like — it was
    an **unbounded loop**, 5003 model calls from one question.
-3. The critic was **rejecting every answer**, because it was shown 62% of the
-   evidence the draft was written from.
+3. The critic was **rejecting every answer**, because it was shown about a
+   tenth of the evidence the draft was written from.
+4. The citation gate could **approve answers it never checked**: an
+   unparseable judge reply counted as a pass, and a draft with no citations
+   skipped the structural check.
 
 ## Corpus
 
@@ -36,7 +39,7 @@ three are reported rather than quietly dropped:
 |---|---|
 | Source | arXiv, query `retrieval augmented generation`, top 40 by relevance |
 | Papers ingested | 40 / 40 PDFs downloaded |
-| Chunks indexed | **487** (800 chars, 120 overlap) |
+| Chunks indexed | **487** (800 words, 120-word overlap; median 5,496 characters) |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2`, 384-dim, local |
 | Vector store | Qdrant, embedded mode (`QDRANT_PATH`), cosine distance |
 
@@ -210,10 +213,17 @@ prevent. It earned its place on the first live question.
 
 **The cause was a context mismatch, not a strict judge.** The critic truncated
 every chunk to `text[:500]` while synthesis received the full text. Chunks are
-800 characters, so the judge was ruling on 62% of the evidence the draft was
-written from: any claim drawn from the tail of a chunk looked unsupported
-because the supporting sentence was never in the judge's prompt. The critic was
+800 *words*, a median of 5,496 characters across the 487 indexed chunks, so the
+judge saw on average about **10%** of each chunk the draft was written from:
+any claim drawn from past a chunk's first few sentences looked unsupported
+because the supporting text was never in the judge's prompt. The critic was
 being shown less than the writer and rejecting the difference.
+
+*Correction, 2026-10-25:* this section originally said chunks were 800
+characters and the judge saw 62% of the evidence. `chunk.py` windows on words,
+not characters; the 10% figure is measured over the indexed collection
+(the mean of `min(500, len(chunk)) / len(chunk)`). The fix and the
+before/after below are unaffected; the mismatch was larger than first reported.
 
 Re-running q1 after the fix — same question, same strategy, same corpus:
 
@@ -232,6 +242,12 @@ after the fix, and q2's re-run was blocked when the daily quota ran out
 mid-question — the harness stopped cleanly with `questions_completed: 0` rather
 than losing the run, which is the partial-results handling working as intended.
 An `unverified_rate` across the full 12 questions is still unmeasured.
+
+One further caveat, found later: at the time, an unparseable judge reply was
+also recorded as `approved` and left no trace of which branch produced the
+verdict, so the "after" row cannot be shown, after the fact, to be a judge
+ruling rather than a fail-open. See
+[2026-10-25](#2026-10-25-two-ways-past-the-citation-gate-without-being-checked).
 
 One retrospective correction this forces: the historical data point quoted
 below (`retries=2`) hit the retry cap, which means it was almost certainly an
@@ -277,6 +293,44 @@ The lesson worth keeping: the existing bounded-retry test passed throughout,
 because it only ever drove the *semantic* rejection path, where the cap did
 apply. A second rejection path was added later and silently escaped the bound
 the first one was tested against.
+
+### 2026-10-25: two ways past the citation gate without being checked
+
+Found in code review, not in a live run. Both let an answer come back
+`approved` without the gate ever verifying it:
+
+- **An unparseable judge reply was an approval.** If the judge returned prose
+  instead of JSON, the critic substituted `faithful: true` and approved the
+  draft, with `critic_feedback` left empty, so the final state could not
+  distinguish "the judge ruled it faithful" from "the judge said nothing
+  usable". Reproduced offline with a stub judge returning
+  `"I think this looks fine, honestly"`: verdict `approved`.
+- **A draft with no citations skipped the structural check.** The check
+  compared cited IDs against retrieved ones; an empty set has nothing to
+  compare, so it passed, and the judge asks whether claims are *supported*,
+  not whether they are *cited*. A citation gate could approve an answer with
+  no citations.
+
+**Fixed.** A reply the parser cannot read (no JSON object, or no boolean
+`faithful`) is now a rejection through `_reject()`, so it stays inside the
+retry bound and ends `unverified` at the cap. The parser was loosened at the
+same time to accept a JSON object wrapped in fences or a sentence of prose,
+so harmless formatting does not become a rejection. An uncited draft is now a
+structural rejection routed to the **retriever**, not synthesis: a writer that
+cited nothing most likely found nothing it could attribute, and a fresh search
+addresses that, where re-drafting against the same chunks only helps if it
+forgot the format. Regression tests:
+`test_unparseable_judge_is_a_failed_check_not_an_approval`,
+`test_uncited_draft_is_rejected_structurally_and_re_retrieves`, and the parser
+cases in `tests/test_critic_parsing.py`.
+
+**What this changes about earlier numbers.** Nothing measured, because nothing
+at scale has been measured: three live questions total. But it does weaken one
+claim: the 2026-09-12 "after" row (q1 approved on the first pass) was produced
+by code where a fail-open looked identical to a real approval, so it is
+consistent with the context fix working and is not proof of it. The full eval
+should run on this version, and its `unverified_rate` now counts malformed
+judge replies and uncited drafts as unverified rather than approved.
 
 ## Metrics added before the real eval run
 

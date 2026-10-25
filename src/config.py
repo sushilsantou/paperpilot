@@ -30,7 +30,8 @@ class Settings:
     qdrant_path: str = os.getenv("QDRANT_PATH", "")
     qdrant_collection: str = os.getenv("QDRANT_COLLECTION", "arxiv_papers")
 
-    # Chunking
+    # Chunking. Both values are in WORDS, not characters: src/ingestion/chunk.py
+    # splits on whitespace. 800 words is a median of ~5.5k characters here.
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "800"))
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "120"))
 

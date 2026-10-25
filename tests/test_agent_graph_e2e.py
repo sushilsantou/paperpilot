@@ -116,29 +116,56 @@ def test_retry_loop_is_bounded_and_flags_the_unverified_answer(client, stub_llm_
     assert fake.calls["critic"] == settings.max_critic_retries + 1
 
 
-def test_critic_survives_an_unparseable_judge_response(client, stub_llm_and_embeddings):
-    """If the judge returns malformed JSON the pipeline must fail open on the
-    draft rather than crash — an LLM returning bad JSON is a normal event."""
-    import src.agents.critic_agent as critic_mod
+def test_unparseable_judge_is_a_failed_check_not_an_approval(client, stub_llm_and_embeddings):
+    """Regression: a judge that returned prose instead of JSON used to fail
+    open, so the draft came back "approved" without the judge ever ruling on
+    it. A malformed verdict must count as a failed check, stay inside the retry
+    bound, and end unverified rather than crash or loop."""
+    from types import SimpleNamespace
 
     draft = "RAG grounds answers in retrieved evidence [arxiv:2401.00001]."
-    fake = stub_llm_and_embeddings(FakeLLM(drafts=[draft], verdicts=[]))
 
-    class BadJudge(FakeLLM):
+    class ProseJudge(FakeLLM):
         def invoke(self, prompt):
             if "fact-checker" in prompt:
                 self.calls["critic"] += 1
-                from types import SimpleNamespace
-
                 return SimpleNamespace(content="I think this looks fine, honestly")
             return super().invoke(prompt)
 
-    bad = stub_llm_and_embeddings(BadJudge(drafts=[draft], verdicts=[]))
+    fake = stub_llm_and_embeddings(ProseJudge(drafts=[draft] * 10, verdicts=[]))
 
     result = answer_question("How does RAG reduce hallucination?", client=client)
 
-    assert result["final_answer"] == draft
+    assert result["critic_verdict"] == "unverified"
+    assert result["retry_count"] == settings.max_critic_retries
+    assert fake.calls["critic"] == settings.max_critic_retries + 1
+    assert "not a valid JSON verdict" in result["final_answer"]
+
+
+def test_uncited_draft_is_rejected_structurally_and_re_retrieves(client, stub_llm_and_embeddings):
+    """Regression: the structural check only compared cited IDs against
+    retrieved ones, so a draft with no citations had nothing to fail on and
+    went to the judge, which checks support, not citation. A citation gate
+    must not approve an answer that cites nothing."""
+    uncited = "RAG grounds answers in retrieved evidence."
+    cited = "RAG grounds answers in retrieved evidence [arxiv:2401.00001]."
+
+    fake = stub_llm_and_embeddings(
+        FakeLLM(
+            drafts=[uncited, cited],
+            verdicts=[{"faithful": True, "issues": "", "sufficient_context": True}],
+        )
+    )
+
+    result = answer_question("How does RAG reduce hallucination?", client=client)
+
     assert result["critic_verdict"] == "approved"
+    assert result["final_answer"] == cited
+    assert result["retry_count"] == 1
+    # the uncited draft never reached the judge
+    assert fake.calls["critic"] == 1
+    # and it sent control back to the retriever, not just to synthesis
+    assert fake.calls["rewrite"] == 2
 
 
 def test_repeated_structural_failures_are_bounded(client, stub_llm_and_embeddings):
@@ -191,9 +218,10 @@ def test_giving_up_is_not_reported_as_approved(client, stub_llm_and_embeddings):
 
 def test_critic_judges_against_the_same_evidence_synthesis_saw():
     """Regression: the critic used to truncate each chunk to text[:500] while
-    synthesis saw the whole thing. Chunks are 800 chars, so the judge ruled on
-    62% of the evidence and rejected claims whose support it was never shown --
-    which is a structural cause of a 100% rejection rate, not a strict judge.
+    synthesis saw the whole thing. Chunks are 800 words (a median of ~5.5k
+    characters), so the judge ruled on about a tenth of the evidence and
+    rejected claims whose support it was never shown -- a structural cause of
+    a 100% rejection rate, not a strict judge.
     """
     import src.agents.critic_agent as critic_mod
     import src.agents.synthesis_agent as synthesis_mod
@@ -201,7 +229,8 @@ def test_critic_judges_against_the_same_evidence_synthesis_saw():
 
     tail = "THE-SUPPORTING-SENTENCE-LIVES-HERE"
     chunk = {
-        "text": "x" * settings.chunk_size + tail,
+        # a full-size chunk: settings.chunk_size is a word count
+        "text": " ".join(["evidence"] * settings.chunk_size) + " " + tail,
         "source_id": "2401.00001",
         "source_title": "Paper",
         "chunk_index": 0,
