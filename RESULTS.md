@@ -40,6 +40,7 @@ four are reported rather than quietly dropped:
 | Source | arXiv, query `retrieval augmented generation`, top 40 by relevance |
 | Papers ingested | 40 / 40 PDFs downloaded |
 | Chunks indexed | **487** (800 words, 120-word overlap; median 5,496 characters) |
+| Second index | 1,916 chunks (200 words, 30-word overlap), `arxiv_papers_200`, for the [chunk-size comparison](#chunk-size-200-words-vs-800-at-equal-text-budget) only |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2`, 384-dim, local |
 | Vector store | Qdrant, embedded mode (`QDRANT_PATH`), cosine distance |
 
@@ -147,6 +148,73 @@ papers is a small neighbourhood to expand into, and of 165 authors only **4**
 appear on more than one paper, so co-authorship connects almost nothing.
 Categories carry nearly all the connectivity, and they are coarse — `cs.IR`
 alone covers 29 of the 40 papers, so it barely discriminates.
+
+## Chunk size: 200 words vs 800, at equal text budget
+
+Run 2026-10-25. A second index over the same 40 PDFs with the same embedder,
+in its own collection so the 800-word index above is untouched:
+
+```
+CHUNK_SIZE=200 CHUNK_OVERLAP=30 QDRANT_COLLECTION=arxiv_papers_200 python -m src.ingestion.ingest
+QDRANT_COLLECTION=arxiv_papers_200 python -m src.eval.run_retrieval_eval            # top_k=5
+QDRANT_COLLECTION=arxiv_papers_200 TOP_K=20 python -m src.eval.run_retrieval_eval   # top_k=20
+```
+
+That produced **1,916 chunks** (vs 487). Overlap is 15% of the chunk in both
+indexes, so the two differ only in granularity. Same 12 questions, raw
+question text, candidate pool 20.
+
+| strategy | 800w, top_k=5 (above) | 200w, top_k=5 | **200w, top_k=20** |
+|---|---|---|---|
+| vector_only | 0.8833 · 6/12 | 0.7500 · 2/12 | **0.9667 · 10/12** |
+| hybrid_light | 0.8833 · 7/12 | 0.8000 · 3/12 | 0.9667 · 10/12 |
+| hybrid | 0.9000 · 7/12 | 0.7833 · 3/12 | 0.9667 · 10/12 |
+| hybrid_heavy | 0.9000 · 7/12 | 0.7833 · 3/12 | 0.9667 · 10/12 |
+| graph_light | 0.9000 · 7/12 | 0.7833 · 3/12 | 0.9500 · 9/12 |
+| graph | 0.9000 · 7/12 | 0.7833 · 3/12 | 0.9500 · 9/12 |
+| graph_heavy | 0.9000 · 7/12 | 0.7833 · 3/12 | 0.9500 · 9/12 |
+
+Cells are avg keyword recall · perfect-recall questions. Latency is omitted:
+see the reproducibility note above.
+
+**At the same top_k, small chunks lose on every row, and that comparison is
+rigged.** Five 200-word chunks are about 1,000 words of retrieved text against
+about 4,000 for five 800-word chunks, and keyword recall counts expected terms
+*anywhere* in the retrieved text. A quarter of the text finds fewer terms more
+or less automatically. The 200w/top_k=5 column is reported because it was run,
+not because it measures chunk size.
+
+**At equal text budget, small chunks win: 0.9667 vs 0.9000 recall, and 10/12
+questions at perfect recall vs 7/12.** Twenty 200-word chunks are the same
+~4,000 words as five 800-word chunks. The likely explanation, not tested here,
+is that a budget spent in smaller pieces covers more distinct passages rather
+than the unrelated stretches inside a few long ones. Three more questions at perfect recall is a larger move than hybrid's
+single-question gain, though on 12 questions it is still a small one.
+
+Three things limit what this shows:
+
+- **The top_k=20 column says nothing about keyword blending.** `hybrid_search`
+  re-ranks a candidate pool of 20 down to `top_k`. At `top_k=20` it returns the
+  whole pool, so the keyword weight can only reorder chunks, not change which
+  ones come back. The four identical hybrid rows are true by construction, not
+  a finding. Testing the blend at this granularity needs a pool larger than
+  `top_k`.
+- **The graph lost one question** (0.9500, 9/12, against vector_only's
+  0.9667, 10/12). That is a single-item change on 12 questions. It fits the
+  null result above and does not show the graph causing harm.
+- **The metric probably favours this result.** More, smaller passages means
+  more varied vocabulary in the retrieved text, which is exactly what keyword
+  recall counts. Whether the extra passages are *relevant* needs the relevance
+  labels this eval does not have, plus a live agent run to see whether
+  synthesis does better with 20 short excerpts than with 5 long ones.
+
+**Nothing in the system was changed.** The agent still retrieves from the
+800-word `arxiv_papers` at `TOP_K=5`. Switching would mean indexing at 200
+words *and* raising `TOP_K` to 20: the prompt stays about the same size, but
+the critic judges four times as many separate excerpts. That is worth a
+measured agent run before it becomes the default. Each configuration was run
+once. Recall reproduced exactly across four runs of the 800-word sweep, so it
+is expected to be stable here too, but that has not been checked for this index.
 
 ## The full agent eval: sampled, never completed
 
