@@ -206,7 +206,9 @@ live key came back `unverified`: the critic rejected every answer. The cause was
 but a context mismatch — the critic truncated each chunk to 500 characters while synthesis saw the
 full 800-word chunk (a median of ~5.5k characters), so it was ruling on about a tenth of the
 evidence the draft was written from. After the fix, q1 went from never-approved after 2 retries
-(78.4s) to approved on the first pass (14.7s). Details in
+(78.4s) to approved on the first pass (14.7s). Re-run on 2026-10-25 with the gate fixes below in
+place, where an unreadable judge reply can no longer pass, q1 was approved again, after one
+retry (32.8s). Details in
 [RESULTS.md](RESULTS.md#2026-09-12-the-critic-was-rejecting-everything-and-it-was-right-to).
 
 **Updated 2026-10-25 — two ways past the citation gate, closed.** Code review found that an

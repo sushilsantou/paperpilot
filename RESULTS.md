@@ -317,6 +317,32 @@ verdict, so the "after" row cannot be shown, after the fact, to be a judge
 ruling rather than a fail-open. See
 [2026-10-25](#2026-10-25-two-ways-past-the-citation-gate-without-being-checked).
 
+**Re-run 2026-10-25, on code with both gate fixes in.** Same question (q1),
+same strategy (`hybrid`), same 800-word index. On this code an approval can
+only come from a judge that returned a parseable `faithful: true` on a draft
+that cites retrieved sources:
+
+```
+python -m src.eval.run_eval --offset 0 --limit 1 --strategies hybrid --out eval_slice5.json
+[hybrid] q1: recall=0.80 citation_validity=1.00 retries=1 latency=32.8s
+```
+
+| | retries | latency | verdict | citation validity |
+|---|---|---|---|---|
+| before the fix (2026-09-12) | 2 | 78.4 s | **unverified** | 1.00 (never approved) |
+| after, current code (2026-10-25) | 1 | 32.8 s | **approved, after one retry** | 1.00 (verified) |
+
+That answers the open question above: q1 does pass the gate when a fail-open
+is impossible. It **did not pass on the first attempt**, though. One draft was
+rejected before the second was approved, so the speed-up is **2.4x**, not the
+5.3x reported in September. Why that first draft was rejected cannot be read
+back from this run: `run_eval.py` records only the final verdict, not each
+rejection's reason, so a judge ruling, a malformed judge reply and the new
+uncited-draft check all look the same. Query rewriting and synthesis are also
+nondeterministic, so September's 0 retries and today's 1 are two single
+samples of the same question, not a trend. What both runs agree on is the
+verdict: approved, where both live questions before the fix hit the retry cap.
+
 One retrospective correction this forces: the historical data point quoted
 below (`retries=2`) hit the retry cap, which means it was almost certainly an
 unverified answer reported without that caveat. Its `citation_validity=1.00`
@@ -396,9 +422,11 @@ cases in `tests/test_critic_parsing.py`.
 at scale has been measured: three live questions total. But it does weaken one
 claim: the 2026-09-12 "after" row (q1 approved on the first pass) was produced
 by code where a fail-open looked identical to a real approval, so it is
-consistent with the context fix working and is not proof of it. The full eval
-should run on this version, and its `unverified_rate` now counts malformed
-judge replies and uncited drafts as unverified rather than approved.
+consistent with the context fix working and is not proof of it. q1 has since
+been re-run on this version and was approved after one retry (see the
+[re-run](#2026-09-12-the-critic-was-rejecting-everything-and-it-was-right-to)).
+The full eval should run on this version, and its `unverified_rate` now counts
+malformed judge replies and uncited drafts as unverified rather than approved.
 
 ## Metrics added before the real eval run
 
